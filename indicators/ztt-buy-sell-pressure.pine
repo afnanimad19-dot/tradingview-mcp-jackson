@@ -1,29 +1,26 @@
 //@version=5
 // ═══════════════════════════════════════════════════════════════════════════
-//  ZTT Buy/Sell Pressure + Signals
+//  ZTT Buy/Sell Pressure + Signals  (v2)
 //  Based on the "From Zero to Trader" masterclass rules:
 //    • Trend = market structure (Higher Highs/Higher Lows vs Lower Lows/
 //      Lower Highs), confirmed by CANDLE BODY closes — wicks don't count.
 //    • 50 EMA used only as extra confluence ("cherry on top"), never alone.
 //    • Entries only on confirmation candles: Engulfing, Morning/Evening Star.
-//    • Optional session filter: London → NY overlap window
-//      (1:00 AM – 10:30 AM New York time = 9:00 AM – 6:30 PM UAE time).
-//    • Buy/Sell pressure gauge estimates who is in control from where each
-//      candle closes inside its range, weighted by volume.
+//    • Session zones: Asia (slow — avoid), London, and the Golden Window
+//      (London/NY overlap, 8:00–10:30 AM New York = ~4:00–6:30 PM UAE).
+//    • Previous-day High / Low / Close lines (PDH / PDL / PDC).
+//    • Liquidity sweeps: a wick that takes out PDH/PDL or the last swing
+//      point but CLOSES back inside = stop-hunt warning.
+//    • Every BUY/SELL signal draws Entry, Stop Loss, TP1 (1:2), TP2 (1:4)
+//      — the course's minimum and target risk-to-reward.
 //
-//  A BUY arrow prints only when ALL of these line up on the CLOSED bar:
-//    1. Structure is bullish (last pivots made a HH + HL)
-//    2. Price is above the 50 EMA
-//    3. Buy pressure % is at or above your threshold
-//    4. A bullish confirmation candle just closed
-//    5. (Optional) We are inside the high-volume session window
-//  SELL is the exact mirror.
+//  This indicator NEVER places trades. It only shows information.
+//  You decide, you click, you are responsible.
 //
 //  HONEST WARNING: no indicator is "80% accurate". This tool stacks
-//  confluence so you take FEWER, better trades. Always use a stop loss and
-//  the position-sizing formula from the course. Test on DEMO first.
+//  confluence so you take FEWER, better trades. Test on DEMO first.
 // ═══════════════════════════════════════════════════════════════════════════
-indicator("ZTT Buy/Sell Pressure + Signals", shorttitle="ZTT Signals", overlay=true, max_labels_count=100)
+indicator("ZTT Buy/Sell Pressure + Signals", shorttitle="ZTT Signals", overlay=true, max_labels_count=200, max_lines_count=200)
 
 // ─── Inputs ─────────────────────────────────────────────────────────────────
 grpP = "Buy/Sell Pressure"
@@ -36,14 +33,25 @@ emaLen   = input.int(50, "EMA length", minval=1, group=grpT)
 pivotLen = input.int(5, "Structure pivot strength", minval=2, maxval=20, group=grpT,
      tooltip="How many bars on each side make a swing high/low. Bigger = only major structure counts.")
 
-grpS = "Session filter (Forex/Gold)"
-useSession = input.bool(false, "Only signal during London–NY window", group=grpS,
-     tooltip="Course rule: trade 1:00 AM to 10:30 AM New York time only. Turn OFF for crypto (24/7).")
-sessWindow = input.session("0100-1030", "Window (New York time)", group=grpS)
+grpS = "Sessions (times in New York timezone)"
+showSessions = input.bool(true, "Shade trading sessions", group=grpS,
+     tooltip="Asia = gray (slow, avoid). London = blue. Golden Window (London/NY overlap) = gold. Works on intraday charts.")
+useSession = input.bool(false, "Only signal during London + Golden Window", group=grpS,
+     tooltip="Course rule: trade 1:00 AM to 10:30 AM New York time only (9:00 AM - 6:30 PM UAE). Turn OFF for crypto (24/7).")
+
+grpL = "Levels & Liquidity"
+showPDLevels = input.bool(true, "Previous day High / Low / Close lines", group=grpL)
+showSweeps   = input.bool(true, "Mark liquidity sweeps (stop hunts)", group=grpL,
+     tooltip="A wick takes out the previous-day high/low or last swing point but the candle CLOSES back inside. Often a reversal warning.")
+
+grpR = "Trade levels on signals"
+showTargets = input.bool(true, "Draw Entry / SL / TP1 / TP2 on signals", group=grpR)
+slMode = input.string("Signal candle wick", "Stop loss placement", options=["Signal candle wick", "Last swing point"], group=grpR,
+     tooltip="Course style: just beyond the wick of the confirmation candle. 'Last swing point' = beyond the last Higher Low / Lower High (wider stop).")
 
 grpV = "Display"
-showTable   = input.bool(true, "Show pressure dashboard", group=grpV)
-showSignals = input.bool(true, "Show BUY/SELL arrows", group=grpV)
+showTable      = input.bool(true, "Show dashboard", group=grpV)
+showSignals    = input.bool(true, "Show BUY/SELL arrows", group=grpV)
 minBarsBetween = input.int(10, "Min bars between signals", minval=0, maxval=100, group=grpV)
 
 // ─── Buy/Sell pressure ──────────────────────────────────────────────────────
@@ -59,6 +67,8 @@ sumBuy  = math.sum(buyVol, pressureLen)
 sumSell = math.sum(sellVol, pressureLen)
 buyPct  = sumBuy + sumSell > 0 ? 100 * sumBuy / (sumBuy + sumSell) : 50
 sellPct = 100 - buyPct
+
+atr = ta.atr(14)
 
 // ─── Trend: 50 EMA + market structure from pivots ──────────────────────────
 ema50 = ta.ema(close, emaLen)
@@ -94,23 +104,75 @@ bearBar   = close < open
 bullEngulf = bullBar and bearBar[1] and close >= open[1] and open <= close[1] and body > body[1]
 bearEngulf = bearBar and bullBar[1] and close <= open[1] and open >= close[1] and body > body[1]
 
-smallMid   = body[1] < body[2] * 0.5  // middle candle is small (doji/hammer type)
+smallMid    = body[1] < body[2] * 0.5  // middle candle is small (doji/hammer type)
 morningStar = bearBar[2] and smallMid and bullBar and close > (open[2] + close[2]) / 2
 eveningStar = bullBar[2] and smallMid and bearBar and close < (open[2] + close[2]) / 2
 
 bullConfirm = bullEngulf or morningStar
 bearConfirm = bearEngulf or eveningStar
 
-// ─── Session window (New York time, per the course) ────────────────────────
-inSession = not useSession or not na(time(timeframe.period, sessWindow, "America/New_York"))
-bgcolor(useSession and inSession ? color.new(color.blue, 96) : na, title="Session window")
+// ─── Sessions (New York timezone, per the course) ───────────────────────────
+// Asia/Tokyo:  5:00 PM – 1:00 AM NY  → slow, "fighters stretching", avoid
+// London:      1:00 AM – 8:00 AM NY  → trend initiation
+// Golden:      8:00 AM – 10:30 AM NY → London/NY overlap, max volatility
+// NY late:    10:30 AM – 5:00 PM NY  → volume dies, no new entries
+asiaSess   = time(timeframe.period, "1700-0100", "America/New_York")
+londonSess = time(timeframe.period, "0100-0800", "America/New_York")
+goldenSess = time(timeframe.period, "0800-1030", "America/New_York")
+nyLateSess = time(timeframe.period, "1030-1700", "America/New_York")
+
+inAsia   = not na(asiaSess)
+inLondon = not na(londonSess)
+inGolden = not na(goldenSess)
+inNyLate = not na(nyLateSess)
+
+bgcolor(showSessions and timeframe.isintraday and inAsia   ? color.new(color.gray,   94) : na, title="Asia session")
+bgcolor(showSessions and timeframe.isintraday and inLondon ? color.new(color.blue,   94) : na, title="London session")
+bgcolor(showSessions and timeframe.isintraday and inGolden ? color.new(color.orange, 88) : na, title="Golden Window (London/NY overlap)")
+
+// Session-open markers
+newAsia   = inAsia and not inAsia[1]
+newLondon = inLondon and not inLondon[1]
+newGolden = inGolden and not inGolden[1]
+plotshape(showSessions and timeframe.isintraday and newAsia,   "Asia open",   shape.flag, location.top, color.new(color.gray, 30),   text="ASIA",   textcolor=color.gray,   size=size.tiny)
+plotshape(showSessions and timeframe.isintraday and newLondon, "London open", shape.flag, location.top, color.new(color.blue, 20),   text="LONDON", textcolor=color.blue,   size=size.tiny)
+plotshape(showSessions and timeframe.isintraday and newGolden, "NY overlap",  shape.flag, location.top, color.new(color.orange, 10), text="NY",     textcolor=color.orange, size=size.tiny)
+
+// Signal window: London + Golden (the course's 1:00 AM – 10:30 AM NY rule)
+inTradeWindow = not useSession or inLondon or inGolden
+
+// ─── Previous day High / Low / Close ────────────────────────────────────────
+[pdH, pdL, pdC] = request.security(syminfo.tickerid, "D", [high[1], low[1], close[1]], lookahead=barmerge.lookahead_on)
+
+plot(showPDLevels ? pdH : na, "PDH", color=color.new(color.red, 35),    style=plot.style_linebr, linewidth=1)
+plot(showPDLevels ? pdL : na, "PDL", color=color.new(color.teal, 35),   style=plot.style_linebr, linewidth=1)
+plot(showPDLevels ? pdC : na, "PDC", color=color.new(color.orange, 25), style=plot.style_linebr, linewidth=1)
+
+var label pdhLbl = na
+var label pdlLbl = na
+var label pdcLbl = na
+if showPDLevels and barstate.islast
+    label.delete(pdhLbl)
+    label.delete(pdlLbl)
+    label.delete(pdcLbl)
+    pdhLbl := label.new(bar_index + 3, pdH, "PDH " + str.tostring(pdH, format.mintick), style=label.style_label_left, color=color.new(color.red, 80),    textcolor=color.red,    size=size.small)
+    pdlLbl := label.new(bar_index + 3, pdL, "PDL " + str.tostring(pdL, format.mintick), style=label.style_label_left, color=color.new(color.teal, 80),   textcolor=color.teal,   size=size.small)
+    pdcLbl := label.new(bar_index + 3, pdC, "PDC " + str.tostring(pdC, format.mintick), style=label.style_label_left, color=color.new(color.orange, 80), textcolor=color.orange, size=size.small)
+
+// ─── Liquidity sweeps (stop hunts) ──────────────────────────────────────────
+// Wick pokes beyond a level everyone watches, but the body closes back inside.
+sweepUp   = showSweeps and barstate.isconfirmed and ((high > pdH and close < pdH) or (not na(lastPH) and high > lastPH and close < lastPH))
+sweepDown = showSweeps and barstate.isconfirmed and ((low < pdL and close > pdL) or (not na(lastPL) and low < lastPL and close > lastPL))
+
+plotshape(sweepUp,   "Sweep of highs", shape.xcross, location.abovebar, color.new(color.red, 20),  text="SWEEP", textcolor=color.new(color.red, 20),  size=size.tiny)
+plotshape(sweepDown, "Sweep of lows",  shape.xcross, location.belowbar, color.new(color.teal, 20), text="SWEEP", textcolor=color.new(color.teal, 20), size=size.tiny)
 
 // ─── Signals ────────────────────────────────────────────────────────────────
 var int lastSigBar = -99999
 canSignal = bar_index - lastSigBar >= minBarsBetween
 
-buyRaw  = structBull and close > ema50 and buyPct  >= pressureThresh and bullConfirm and inSession
-sellRaw = structBear and close < ema50 and sellPct >= pressureThresh and bearConfirm and inSession
+buyRaw  = structBull and close > ema50 and buyPct  >= pressureThresh and bullConfirm and inTradeWindow
+sellRaw = structBear and close < ema50 and sellPct >= pressureThresh and bearConfirm and inTradeWindow
 
 buySignal  = buyRaw  and canSignal
 sellSignal = sellRaw and canSignal
@@ -124,14 +186,49 @@ plotshape(showSignals and sellSignal, "SELL", shape.labeldown, location.abovebar
 plotshape(bosUp,   "BOS Up",   shape.triangleup,   location.belowbar, color.new(color.teal, 40), size=size.tiny)
 plotshape(bosDown, "BOS Down", shape.triangledown, location.abovebar, color.new(color.red, 40),  size=size.tiny)
 
+// ─── Entry / SL / TP levels on every signal ─────────────────────────────────
+drawTradeLevels(bool isBuy) =>
+    buf = atr * 0.25  // small buffer beyond the wick, course style
+    float slPrice = na
+    if isBuy
+        slPrice := slMode == "Signal candle wick" ? low - buf : math.min(nz(lastPL, low), low) - buf
+    else
+        slPrice := slMode == "Signal candle wick" ? high + buf : math.max(nz(lastPH, high), high) + buf
+    riskAmt = math.abs(close - slPrice)
+    if riskAmt > 0
+        tp1 = isBuy ? close + 2 * riskAmt : close - 2 * riskAmt
+        tp2 = isBuy ? close + 4 * riskAmt : close - 4 * riskAmt
+        x2  = bar_index + 25
+        line.new(bar_index, close,   x2, close,   color=color.new(color.gray, 20),  width=1, style=line.style_dotted)
+        line.new(bar_index, slPrice, x2, slPrice, color=color.new(color.red, 0),    width=2)
+        line.new(bar_index, tp1,     x2, tp1,     color=color.new(color.teal, 30),  width=1)
+        line.new(bar_index, tp2,     x2, tp2,     color=color.new(color.teal, 0),   width=2)
+        label.new(x2, close,   "Entry "     + str.tostring(close,   format.mintick), style=label.style_label_left, color=color.new(color.gray, 70), textcolor=color.white, size=size.small)
+        label.new(x2, slPrice, "SL "        + str.tostring(slPrice, format.mintick), style=label.style_label_left, color=color.new(color.red, 60),  textcolor=color.red,   size=size.small)
+        label.new(x2, tp1,     "TP1 (1:2) " + str.tostring(tp1,     format.mintick), style=label.style_label_left, color=color.new(color.teal, 70), textcolor=color.teal,  size=size.small)
+        label.new(x2, tp2,     "TP2 (1:4) " + str.tostring(tp2,     format.mintick), style=label.style_label_left, color=color.new(color.teal, 60), textcolor=color.teal,  size=size.small)
+        // Dynamic alert with the exact numbers (enable via "Any alert() function call")
+        alert((isBuy ? "ZTT BUY " : "ZTT SELL ") + syminfo.ticker
+             + " | Entry " + str.tostring(close, format.mintick)
+             + " | SL "    + str.tostring(slPrice, format.mintick)
+             + " | TP1 "   + str.tostring(tp1, format.mintick)
+             + " | TP2 "   + str.tostring(tp2, format.mintick), alert.freq_once_per_bar_close)
+
+if showTargets and buySignal
+    drawTradeLevels(true)
+if showTargets and sellSignal
+    drawTradeLevels(false)
+
 // ─── Dashboard table ────────────────────────────────────────────────────────
-var table dash = table.new(position.top_right, 2, 5, border_width=1)
+var table dash = table.new(position.top_right, 2, 7, border_width=1)
 if showTable and barstate.islast
-    trendTxt  = structBull ? "BULLISH (HH+HL)" : structBear ? "BEARISH (LL+LH)" : "RANGING / UNCLEAR"
-    trendCol  = structBull ? color.teal : structBear ? color.red : color.gray
-    pressCol  = buyPct >= pressureThresh ? color.teal : sellPct >= pressureThresh ? color.red : color.gray
-    sessTxt   = not useSession ? "OFF (24/7)" : inSession ? "OPEN — can trade" : "CLOSED — no trades"
-    emaTxt    = close > ema50 ? "Above 50 EMA" : "Below 50 EMA"
+    trendTxt = structBull ? "BULLISH (HH+HL)" : structBear ? "BEARISH (LL+LH)" : "RANGING / UNCLEAR"
+    trendCol = structBull ? color.teal : structBear ? color.red : color.gray
+    pressCol = buyPct >= pressureThresh ? color.teal : sellPct >= pressureThresh ? color.red : color.gray
+    sessTxt  = inGolden ? "GOLDEN WINDOW — best" : inLondon ? "London — good" : inAsia ? "Asia — slow, avoid" : inNyLate ? "NY late — no new trades" : "Off hours"
+    sessCol  = inGolden ? color.orange : inLondon ? color.blue : color.gray
+    emaTxt   = close > ema50 ? "Above 50 EMA" : "Below 50 EMA"
+    pdcTxt   = close > pdC ? "Above prev close" : "Below prev close"
 
     table.cell(dash, 0, 0, "Buying",  text_color=color.white, bgcolor=color.new(color.teal, 30))
     table.cell(dash, 1, 0, str.tostring(buyPct, "#.0") + " %", text_color=color.white, bgcolor=pressCol)
@@ -141,11 +238,18 @@ if showTable and barstate.islast
     table.cell(dash, 1, 2, trendTxt, text_color=color.white, bgcolor=color.new(trendCol, 20))
     table.cell(dash, 0, 3, "Price",  text_color=color.white, bgcolor=color.new(color.gray, 40))
     table.cell(dash, 1, 3, emaTxt, text_color=color.white, bgcolor=color.new(close > ema50 ? color.teal : color.red, 20))
-    table.cell(dash, 0, 4, "Session", text_color=color.white, bgcolor=color.new(color.gray, 40))
-    table.cell(dash, 1, 4, sessTxt, text_color=color.white, bgcolor=color.new(color.blue, 40))
+    table.cell(dash, 0, 4, "Prev close", text_color=color.white, bgcolor=color.new(color.gray, 40))
+    table.cell(dash, 1, 4, pdcTxt + " (" + str.tostring(pdC, format.mintick) + ")", text_color=color.white, bgcolor=color.new(close > pdC ? color.teal : color.red, 30))
+    table.cell(dash, 0, 5, "Session", text_color=color.white, bgcolor=color.new(color.gray, 40))
+    table.cell(dash, 1, 5, sessTxt, text_color=color.white, bgcolor=color.new(sessCol, 40))
+    table.cell(dash, 0, 6, "Last sweep", text_color=color.white, bgcolor=color.new(color.gray, 40))
+    sweepTxt = sweepUp ? "Highs swept NOW" : sweepDown ? "Lows swept NOW" : "—"
+    table.cell(dash, 1, 6, sweepTxt, text_color=color.white, bgcolor=color.new(color.purple, 50))
 
 // ─── Alerts ─────────────────────────────────────────────────────────────────
 alertcondition(buySignal,  "ZTT BUY signal",  "ZTT BUY: bullish structure + pressure + confirmation candle on {{ticker}} {{interval}}")
 alertcondition(sellSignal, "ZTT SELL signal", "ZTT SELL: bearish structure + pressure + confirmation candle on {{ticker}} {{interval}}")
-alertcondition(bosUp,   "Structure break UP",   "Body close above last swing high on {{ticker}} {{interval}}")
-alertcondition(bosDown, "Structure break DOWN", "Body close below last swing low on {{ticker}} {{interval}}")
+alertcondition(bosUp,      "Structure break UP",   "Body close above last swing high on {{ticker}} {{interval}}")
+alertcondition(bosDown,    "Structure break DOWN", "Body close below last swing low on {{ticker}} {{interval}}")
+alertcondition(sweepUp,    "Liquidity sweep of highs", "Wick above PDH/swing high, closed back inside on {{ticker}} {{interval}}")
+alertcondition(sweepDown,  "Liquidity sweep of lows",  "Wick below PDL/swing low, closed back inside on {{ticker}} {{interval}}")
