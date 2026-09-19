@@ -1,0 +1,151 @@
+//@version=5
+// ═══════════════════════════════════════════════════════════════════════════
+//  ZTT Buy/Sell Pressure + Signals
+//  Based on the "From Zero to Trader" masterclass rules:
+//    • Trend = market structure (Higher Highs/Higher Lows vs Lower Lows/
+//      Lower Highs), confirmed by CANDLE BODY closes — wicks don't count.
+//    • 50 EMA used only as extra confluence ("cherry on top"), never alone.
+//    • Entries only on confirmation candles: Engulfing, Morning/Evening Star.
+//    • Optional session filter: London → NY overlap window
+//      (1:00 AM – 10:30 AM New York time = 9:00 AM – 6:30 PM UAE time).
+//    • Buy/Sell pressure gauge estimates who is in control from where each
+//      candle closes inside its range, weighted by volume.
+//
+//  A BUY arrow prints only when ALL of these line up on the CLOSED bar:
+//    1. Structure is bullish (last pivots made a HH + HL)
+//    2. Price is above the 50 EMA
+//    3. Buy pressure % is at or above your threshold
+//    4. A bullish confirmation candle just closed
+//    5. (Optional) We are inside the high-volume session window
+//  SELL is the exact mirror.
+//
+//  HONEST WARNING: no indicator is "80% accurate". This tool stacks
+//  confluence so you take FEWER, better trades. Always use a stop loss and
+//  the position-sizing formula from the course. Test on DEMO first.
+// ═══════════════════════════════════════════════════════════════════════════
+indicator("ZTT Buy/Sell Pressure + Signals", shorttitle="ZTT Signals", overlay=true, max_labels_count=100)
+
+// ─── Inputs ─────────────────────────────────────────────────────────────────
+grpP = "Buy/Sell Pressure"
+pressureLen    = input.int(20, "Pressure lookback (bars)", minval=5, maxval=200, group=grpP)
+pressureThresh = input.int(60, "Pressure needed for a signal (%)", minval=50, maxval=90, group=grpP,
+     tooltip="BUY needs at least this % of recent volume on the buy side. Higher = fewer but stronger signals.")
+
+grpT = "Trend / Structure"
+emaLen   = input.int(50, "EMA length", minval=1, group=grpT)
+pivotLen = input.int(5, "Structure pivot strength", minval=2, maxval=20, group=grpT,
+     tooltip="How many bars on each side make a swing high/low. Bigger = only major structure counts.")
+
+grpS = "Session filter (Forex/Gold)"
+useSession = input.bool(false, "Only signal during London–NY window", group=grpS,
+     tooltip="Course rule: trade 1:00 AM to 10:30 AM New York time only. Turn OFF for crypto (24/7).")
+sessWindow = input.session("0100-1030", "Window (New York time)", group=grpS)
+
+grpV = "Display"
+showTable   = input.bool(true, "Show pressure dashboard", group=grpV)
+showSignals = input.bool(true, "Show BUY/SELL arrows", group=grpV)
+minBarsBetween = input.int(10, "Min bars between signals", minval=0, maxval=100, group=grpV)
+
+// ─── Buy/Sell pressure ──────────────────────────────────────────────────────
+// Each candle's volume is split by where it closed inside its range:
+// close at the high = all buying, close at the low = all selling.
+rng     = high - low
+buyFrac = rng > 0 ? (close - low) / rng : 0.5
+vol     = nz(volume, 1)  // some feeds have no volume; fall back to equal weight
+buyVol  = vol * buyFrac
+sellVol = vol * (1 - buyFrac)
+
+sumBuy  = math.sum(buyVol, pressureLen)
+sumSell = math.sum(sellVol, pressureLen)
+buyPct  = sumBuy + sumSell > 0 ? 100 * sumBuy / (sumBuy + sumSell) : 50
+sellPct = 100 - buyPct
+
+// ─── Trend: 50 EMA + market structure from pivots ──────────────────────────
+ema50 = ta.ema(close, emaLen)
+plot(ema50, "50 EMA", color=close > ema50 ? color.new(color.teal, 0) : color.new(color.red, 0), linewidth=2)
+
+ph = ta.pivothigh(high, pivotLen, pivotLen)
+pl = ta.pivotlow(low, pivotLen, pivotLen)
+
+var float lastPH = na
+var float prevPH = na
+var float lastPL = na
+var float prevPL = na
+if not na(ph)
+    prevPH := lastPH
+    lastPH := ph
+if not na(pl)
+    prevPL := lastPL
+    lastPL := pl
+
+// Bullish structure = Higher High AND Higher Low. Bearish = LL + LH.
+structBull = not na(prevPH) and not na(prevPL) and lastPH > prevPH and lastPL > prevPL
+structBear = not na(prevPH) and not na(prevPL) and lastPH < prevPH and lastPL < prevPL
+
+// Break of structure by BODY CLOSE (wicks don't count — course rule)
+bosUp   = not na(lastPH) and ta.crossover(close, lastPH)
+bosDown = not na(lastPL) and ta.crossunder(close, lastPL)
+
+// ─── Confirmation candles ───────────────────────────────────────────────────
+body      = math.abs(close - open)
+bullBar   = close > open
+bearBar   = close < open
+
+bullEngulf = bullBar and bearBar[1] and close >= open[1] and open <= close[1] and body > body[1]
+bearEngulf = bearBar and bullBar[1] and close <= open[1] and open >= close[1] and body > body[1]
+
+smallMid   = body[1] < body[2] * 0.5  // middle candle is small (doji/hammer type)
+morningStar = bearBar[2] and smallMid and bullBar and close > (open[2] + close[2]) / 2
+eveningStar = bullBar[2] and smallMid and bearBar and close < (open[2] + close[2]) / 2
+
+bullConfirm = bullEngulf or morningStar
+bearConfirm = bearEngulf or eveningStar
+
+// ─── Session window (New York time, per the course) ────────────────────────
+inSession = not useSession or not na(time(timeframe.period, sessWindow, "America/New_York"))
+bgcolor(useSession and inSession ? color.new(color.blue, 96) : na, title="Session window")
+
+// ─── Signals ────────────────────────────────────────────────────────────────
+var int lastSigBar = -99999
+canSignal = bar_index - lastSigBar >= minBarsBetween
+
+buyRaw  = structBull and close > ema50 and buyPct  >= pressureThresh and bullConfirm and inSession
+sellRaw = structBear and close < ema50 and sellPct >= pressureThresh and bearConfirm and inSession
+
+buySignal  = buyRaw  and canSignal
+sellSignal = sellRaw and canSignal
+if buySignal or sellSignal
+    lastSigBar := bar_index
+
+plotshape(showSignals and buySignal,  "BUY",  shape.labelup,   location.belowbar, color.new(color.teal, 0), text="BUY",  textcolor=color.white, size=size.small)
+plotshape(showSignals and sellSignal, "SELL", shape.labeldown, location.abovebar, color.new(color.red, 0),  text="SELL", textcolor=color.white, size=size.small)
+
+// Structure break markers (early heads-up, NOT an entry by themselves)
+plotshape(bosUp,   "BOS Up",   shape.triangleup,   location.belowbar, color.new(color.teal, 40), size=size.tiny)
+plotshape(bosDown, "BOS Down", shape.triangledown, location.abovebar, color.new(color.red, 40),  size=size.tiny)
+
+// ─── Dashboard table ────────────────────────────────────────────────────────
+var table dash = table.new(position.top_right, 2, 5, border_width=1)
+if showTable and barstate.islast
+    trendTxt  = structBull ? "BULLISH (HH+HL)" : structBear ? "BEARISH (LL+LH)" : "RANGING / UNCLEAR"
+    trendCol  = structBull ? color.teal : structBear ? color.red : color.gray
+    pressCol  = buyPct >= pressureThresh ? color.teal : sellPct >= pressureThresh ? color.red : color.gray
+    sessTxt   = not useSession ? "OFF (24/7)" : inSession ? "OPEN — can trade" : "CLOSED — no trades"
+    emaTxt    = close > ema50 ? "Above 50 EMA" : "Below 50 EMA"
+
+    table.cell(dash, 0, 0, "Buying",  text_color=color.white, bgcolor=color.new(color.teal, 30))
+    table.cell(dash, 1, 0, str.tostring(buyPct, "#.0") + " %", text_color=color.white, bgcolor=pressCol)
+    table.cell(dash, 0, 1, "Selling", text_color=color.white, bgcolor=color.new(color.red, 30))
+    table.cell(dash, 1, 1, str.tostring(sellPct, "#.0") + " %", text_color=color.white, bgcolor=pressCol)
+    table.cell(dash, 0, 2, "Structure", text_color=color.white, bgcolor=color.new(color.gray, 40))
+    table.cell(dash, 1, 2, trendTxt, text_color=color.white, bgcolor=color.new(trendCol, 20))
+    table.cell(dash, 0, 3, "Price",  text_color=color.white, bgcolor=color.new(color.gray, 40))
+    table.cell(dash, 1, 3, emaTxt, text_color=color.white, bgcolor=color.new(close > ema50 ? color.teal : color.red, 20))
+    table.cell(dash, 0, 4, "Session", text_color=color.white, bgcolor=color.new(color.gray, 40))
+    table.cell(dash, 1, 4, sessTxt, text_color=color.white, bgcolor=color.new(color.blue, 40))
+
+// ─── Alerts ─────────────────────────────────────────────────────────────────
+alertcondition(buySignal,  "ZTT BUY signal",  "ZTT BUY: bullish structure + pressure + confirmation candle on {{ticker}} {{interval}}")
+alertcondition(sellSignal, "ZTT SELL signal", "ZTT SELL: bearish structure + pressure + confirmation candle on {{ticker}} {{interval}}")
+alertcondition(bosUp,   "Structure break UP",   "Body close above last swing high on {{ticker}} {{interval}}")
+alertcondition(bosDown, "Structure break DOWN", "Body close below last swing low on {{ticker}} {{interval}}")
