@@ -1,68 +1,74 @@
 //@version=5
 // ═══════════════════════════════════════════════════════════════════════════
-//  ZTT Buy/Sell Pressure + Signals  (v2)
-//  Based on the "From Zero to Trader" masterclass rules:
-//    • Trend = market structure (Higher Highs/Higher Lows vs Lower Lows/
-//      Lower Highs), confirmed by CANDLE BODY closes — wicks don't count.
-//    • 50 EMA used only as extra confluence ("cherry on top"), never alone.
-//    • Entries only on confirmation candles: Engulfing, Morning/Evening Star.
-//    • Session zones: Asia (slow — avoid), London, and the Golden Window
-//      (London/NY overlap, 8:00–10:30 AM New York = ~4:00–6:30 PM UAE).
-//    • Previous-day High / Low / Close lines (PDH / PDL / PDC).
-//    • Liquidity sweeps: a wick that takes out PDH/PDL or the last swing
-//      point but CLOSES back inside = stop-hunt warning.
-//    • Every BUY/SELL signal draws Entry, Stop Loss, TP1 (1:2), TP2 (1:4)
-//      — the course's minimum and target risk-to-reward.
+//  ZTT Buy/Sell Pressure + Signals  (v3 — Smart Money edition)
 //
-//  This indicator NEVER places trades. It only shows information.
-//  You decide, you click, you are responsible.
+//  Course rules (From Zero to Trader):
+//    • Trend = market structure by CANDLE BODY closes (wicks don't count)
+//    • 50 EMA = confluence only, never a reason by itself
+//    • Confirmation candles: Engulfing, Morning/Evening Star
+//    • Trade window: 1:00 AM – 10:30 AM New York (9:00 AM – 6:30 PM UAE)
 //
-//  HONEST WARNING: no indicator is "80% accurate". This tool stacks
-//  confluence so you take FEWER, better trades. Test on DEMO first.
+//  Smart Money Concepts added in v3:
+//    • Order Blocks (OB): last opposite candle before a structure break
+//    • Fair Value Gaps (FVG / imbalance): 3-candle price gaps
+//    • Equal Highs/Lows (EQH/EQL): resting retail liquidity ($$$)
+//    • Liquidity sweeps + TRAP reversals (stop-hunt then reversal candle)
+//    • Rolling POC: the price where the most volume traded
+//
+//  Signal tiers:
+//    • BUY / SELL (solid label)  = full confluence checklist passed
+//    • BUY? / SELL? (small)      = structure + candle agree, but pressure
+//                                  or session is missing — watch, don't chase
+//    • TRAP BUY / TRAP SELL      = liquidity sweep + reversal candle
+//
+//  This indicator NEVER places trades. You decide, you click.
+//  HONEST WARNING: no indicator is "80% accurate". Fewer, better trades.
 // ═══════════════════════════════════════════════════════════════════════════
-indicator("ZTT Buy/Sell Pressure + Signals", shorttitle="ZTT Signals", overlay=true, max_labels_count=200, max_lines_count=200)
+indicator("ZTT Buy/Sell Pressure + Signals", shorttitle="ZTT Signals", overlay=true, max_labels_count=300, max_lines_count=300, max_boxes_count=150, max_bars_back=500)
 
 // ─── Inputs ─────────────────────────────────────────────────────────────────
 grpP = "Buy/Sell Pressure"
 pressureLen    = input.int(20, "Pressure lookback (bars)", minval=5, maxval=200, group=grpP)
-pressureThresh = input.int(60, "Pressure needed for a signal (%)", minval=50, maxval=90, group=grpP,
-     tooltip="BUY needs at least this % of recent volume on the buy side. Higher = fewer but stronger signals.")
+pressureThresh = input.int(60, "Pressure needed for a signal (%)", minval=50, maxval=90, group=grpP)
 
 grpT = "Trend / Structure"
 emaLen   = input.int(50, "EMA length", minval=1, group=grpT)
-pivotLen = input.int(5, "Structure pivot strength", minval=2, maxval=20, group=grpT,
-     tooltip="How many bars on each side make a swing high/low. Bigger = only major structure counts.")
+pivotLen = input.int(5, "Structure pivot strength", minval=2, maxval=20, group=grpT)
 
 grpS = "Sessions (times in New York timezone)"
-showSessions = input.bool(true, "Shade trading sessions", group=grpS,
-     tooltip="Asia = gray (slow, avoid). London = blue. Golden Window (London/NY overlap) = gold. Works on intraday charts.")
-useSession = input.bool(false, "Only signal during London + Golden Window", group=grpS,
-     tooltip="Course rule: trade 1:00 AM to 10:30 AM New York time only (9:00 AM - 6:30 PM UAE). Turn OFF for crypto (24/7).")
+showSessions = input.bool(true, "Shade sessions + show all 4 session opens", group=grpS,
+     tooltip="Opens flagged: SYDNEY 5PM, TOKYO 7PM, LONDON 3AM, NEW YORK 8AM (NY time). Shading: gray=Asia (slow), blue=London, gold=Golden Window overlap.")
+useSession = input.bool(false, "Only signal during course window (1AM-10:30AM NY)", group=grpS,
+     tooltip="Course rule. 9:00 AM - 6:30 PM UAE time. Turn OFF for crypto (24/7).")
 
-grpL = "Levels & Liquidity"
-showPDLevels = input.bool(true, "Previous day High / Low / Close lines", group=grpL)
-showSweeps   = input.bool(true, "Mark liquidity sweeps (stop hunts)", group=grpL,
-     tooltip="A wick takes out the previous-day high/low or last swing point but the candle CLOSES back inside. Often a reversal warning.")
+grpSMC = "Smart Money Concepts"
+showOB     = input.bool(true, "Order Blocks", group=grpSMC)
+showFVG    = input.bool(true, "Fair Value Gaps (imbalance)", group=grpSMC)
+showLiq    = input.bool(true, "Equal Highs/Lows (retail liquidity $$$)", group=grpSMC)
+showSweeps = input.bool(true, "Liquidity sweeps + TRAP reversals", group=grpSMC)
+showPOC    = input.bool(true, "POC (highest-volume price, rolling)", group=grpSMC)
+pocLen     = input.int(150, "POC lookback (bars)", minval=50, maxval=400, group=grpSMC)
+
+grpL = "Levels"
+showPDLevels = input.bool(true, "Previous day High / Low / Close", group=grpL)
 
 grpR = "Trade levels on signals"
 showTargets = input.bool(true, "Draw Entry / SL / TP1 / TP2 on signals", group=grpR)
-slMode = input.string("Signal candle wick", "Stop loss placement", options=["Signal candle wick", "Last swing point"], group=grpR,
-     tooltip="Course style: just beyond the wick of the confirmation candle. 'Last swing point' = beyond the last Higher Low / Lower High (wider stop).")
+slMode = input.string("Signal candle wick", "Stop loss placement", options=["Signal candle wick", "Last swing point"], group=grpR)
 
 grpV = "Display"
 showTable      = input.bool(true, "Show dashboard", group=grpV)
-showSignals    = input.bool(true, "Show BUY/SELL arrows", group=grpV)
-minBarsBetween = input.int(10, "Min bars between signals", minval=0, maxval=100, group=grpV)
+showSignals    = input.bool(true, "Show BUY/SELL labels", group=grpV)
+showEarly      = input.bool(true, "Show early BUY?/SELL? setups", group=grpV,
+     tooltip="Structure + confirmation candle agree but pressure/session filter not met. Information only — wait for full confluence or manage risk tighter.")
+minBarsBetween = input.int(6, "Min bars between signals", minval=0, maxval=100, group=grpV)
 
 // ─── Buy/Sell pressure ──────────────────────────────────────────────────────
-// Each candle's volume is split by where it closed inside its range:
-// close at the high = all buying, close at the low = all selling.
 rng     = high - low
 buyFrac = rng > 0 ? (close - low) / rng : 0.5
-vol     = nz(volume, 1)  // some feeds have no volume; fall back to equal weight
+vol     = nz(volume, 1)
 buyVol  = vol * buyFrac
 sellVol = vol * (1 - buyFrac)
-
 sumBuy  = math.sum(buyVol, pressureLen)
 sumSell = math.sum(sellVol, pressureLen)
 buyPct  = sumBuy + sumSell > 0 ? 100 * sumBuy / (sumBuy + sumSell) : 50
@@ -88,58 +94,53 @@ if not na(pl)
     prevPL := lastPL
     lastPL := pl
 
-// Bullish structure = Higher High AND Higher Low. Bearish = LL + LH.
 structBull = not na(prevPH) and not na(prevPL) and lastPH > prevPH and lastPL > prevPL
 structBear = not na(prevPH) and not na(prevPL) and lastPH < prevPH and lastPL < prevPL
 
-// Break of structure by BODY CLOSE (wicks don't count — course rule)
 bosUp   = not na(lastPH) and ta.crossover(close, lastPH)
 bosDown = not na(lastPL) and ta.crossunder(close, lastPL)
 
 // ─── Confirmation candles ───────────────────────────────────────────────────
-body      = math.abs(close - open)
-bullBar   = close > open
-bearBar   = close < open
+body    = math.abs(close - open)
+bullBar = close > open
+bearBar = close < open
 
 bullEngulf = bullBar and bearBar[1] and close >= open[1] and open <= close[1] and body > body[1]
 bearEngulf = bearBar and bullBar[1] and close <= open[1] and open >= close[1] and body > body[1]
 
-smallMid    = body[1] < body[2] * 0.5  // middle candle is small (doji/hammer type)
+smallMid    = body[1] < body[2] * 0.5
 morningStar = bearBar[2] and smallMid and bullBar and close > (open[2] + close[2]) / 2
 eveningStar = bullBar[2] and smallMid and bearBar and close < (open[2] + close[2]) / 2
 
 bullConfirm = bullEngulf or morningStar
 bearConfirm = bearEngulf or eveningStar
 
-// ─── Sessions (New York timezone, per the course) ───────────────────────────
-// Asia/Tokyo:  5:00 PM – 1:00 AM NY  → slow, "fighters stretching", avoid
-// London:      1:00 AM – 8:00 AM NY  → trend initiation
-// Golden:      8:00 AM – 10:30 AM NY → London/NY overlap, max volatility
-// NY late:    10:30 AM – 5:00 PM NY  → volume dies, no new entries
-asiaSess   = time(timeframe.period, "1700-0100", "America/New_York")
-londonSess = time(timeframe.period, "0100-0800", "America/New_York")
-goldenSess = time(timeframe.period, "0800-1030", "America/New_York")
-nyLateSess = time(timeframe.period, "1030-1700", "America/New_York")
+// ─── Sessions — all 4 major forex sessions (New York timezone) ──────────────
+// Sydney 5PM, Tokyo 7PM, London 3AM, New York 8AM (forex desk opens)
+inSydney = not na(time(timeframe.period, "1700-0200", "America/New_York"))
+inTokyo  = not na(time(timeframe.period, "1900-0400", "America/New_York"))
+inLondonS= not na(time(timeframe.period, "0300-1200", "America/New_York"))
+inNYS    = not na(time(timeframe.period, "0800-1700", "America/New_York"))
 
-inAsia   = not na(asiaSess)
-inLondon = not na(londonSess)
-inGolden = not na(goldenSess)
-inNyLate = not na(nyLateSess)
+// Course-style shading zones
+inAsia   = not na(time(timeframe.period, "1700-0300", "America/New_York"))
+inLondon = not na(time(timeframe.period, "0300-0800", "America/New_York"))
+inGolden = not na(time(timeframe.period, "0800-1030", "America/New_York"))
+inNyLate = not na(time(timeframe.period, "1030-1700", "America/New_York"))
 
-bgcolor(showSessions and timeframe.isintraday and inAsia   ? color.new(color.gray,   94) : na, title="Asia session")
-bgcolor(showSessions and timeframe.isintraday and inLondon ? color.new(color.blue,   94) : na, title="London session")
-bgcolor(showSessions and timeframe.isintraday and inGolden ? color.new(color.orange, 88) : na, title="Golden Window (London/NY overlap)")
+intraday = timeframe.isintraday
+bgcolor(showSessions and intraday and inAsia   ? color.new(color.gray,   94) : na, title="Asia (slow)")
+bgcolor(showSessions and intraday and inLondon ? color.new(color.blue,   94) : na, title="London")
+bgcolor(showSessions and intraday and inGolden ? color.new(color.orange, 88) : na, title="Golden Window")
 
-// Session-open markers
-newAsia   = inAsia and not inAsia[1]
-newLondon = inLondon and not inLondon[1]
-newGolden = inGolden and not inGolden[1]
-plotshape(showSessions and timeframe.isintraday and newAsia,   "Asia open",   shape.flag, location.top, color.new(color.gray, 30),   text="ASIA",   textcolor=color.gray,   size=size.tiny)
-plotshape(showSessions and timeframe.isintraday and newLondon, "London open", shape.flag, location.top, color.new(color.blue, 20),   text="LONDON", textcolor=color.blue,   size=size.tiny)
-plotshape(showSessions and timeframe.isintraday and newGolden, "NY overlap",  shape.flag, location.top, color.new(color.orange, 10), text="NY",     textcolor=color.orange, size=size.tiny)
+// Session-open flags — one for each of the 4 sessions
+plotshape(showSessions and intraday and inSydney  and not inSydney[1],  "Sydney open",   shape.flag, location.top, color.new(color.silver, 30), text="SYDNEY",  textcolor=color.silver, size=size.tiny)
+plotshape(showSessions and intraday and inTokyo   and not inTokyo[1],   "Tokyo open",    shape.flag, location.top, color.new(color.gray, 30),   text="TOKYO",   textcolor=color.gray,   size=size.tiny)
+plotshape(showSessions and intraday and inLondonS and not inLondonS[1], "London open",   shape.flag, location.top, color.new(color.blue, 20),   text="LONDON",  textcolor=color.blue,   size=size.tiny)
+plotshape(showSessions and intraday and inNYS     and not inNYS[1],     "New York open", shape.flag, location.top, color.new(color.orange, 10), text="NEWYORK", textcolor=color.orange, size=size.tiny)
 
-// Signal window: London + Golden (the course's 1:00 AM – 10:30 AM NY rule)
-inTradeWindow = not useSession or inLondon or inGolden
+// Course execution window: 1:00 AM – 10:30 AM NY
+inTradeWindow = not useSession or not na(time(timeframe.period, "0100-1030", "America/New_York"))
 
 // ─── Previous day High / Low / Close ────────────────────────────────────────
 [pdH, pdL, pdC] = request.security(syminfo.tickerid, "D", [high[1], low[1], close[1]], lookahead=barmerge.lookahead_on)
@@ -159,13 +160,168 @@ if showPDLevels and barstate.islast
     pdlLbl := label.new(bar_index + 3, pdL, "PDL " + str.tostring(pdL, format.mintick), style=label.style_label_left, color=color.new(color.teal, 80),   textcolor=color.teal,   size=size.small)
     pdcLbl := label.new(bar_index + 3, pdC, "PDC " + str.tostring(pdC, format.mintick), style=label.style_label_left, color=color.new(color.orange, 80), textcolor=color.orange, size=size.small)
 
-// ─── Liquidity sweeps (stop hunts) ──────────────────────────────────────────
-// Wick pokes beyond a level everyone watches, but the body closes back inside.
+// ─── Liquidity: sweeps, equal highs/lows ────────────────────────────────────
 sweepUp   = showSweeps and barstate.isconfirmed and ((high > pdH and close < pdH) or (not na(lastPH) and high > lastPH and close < lastPH))
 sweepDown = showSweeps and barstate.isconfirmed and ((low < pdL and close > pdL) or (not na(lastPL) and low < lastPL and close > lastPL))
 
 plotshape(sweepUp,   "Sweep of highs", shape.xcross, location.abovebar, color.new(color.red, 20),  text="SWEEP", textcolor=color.new(color.red, 20),  size=size.tiny)
 plotshape(sweepDown, "Sweep of lows",  shape.xcross, location.belowbar, color.new(color.teal, 20), text="SWEEP", textcolor=color.new(color.teal, 20), size=size.tiny)
+
+// Equal highs / equal lows = resting retail liquidity (stop clusters)
+var line  eqhLine = na
+var label eqhLbl  = na
+var line  eqlLine = na
+var label eqlLbl  = na
+if showLiq and not na(ph) and not na(prevPH) and math.abs(lastPH - prevPH) <= atr * 0.25
+    line.delete(eqhLine)
+    label.delete(eqhLbl)
+    lvlH = math.max(lastPH, prevPH)
+    eqhLine := line.new(bar_index - pivotLen, lvlH, bar_index + 10, lvlH, color=color.new(color.fuchsia, 20), style=line.style_dashed, width=1)
+    eqhLbl  := label.new(bar_index + 10, lvlH, "EQH $$$", style=label.style_label_left, color=color.new(color.fuchsia, 75), textcolor=color.fuchsia, size=size.small)
+if showLiq and not na(pl) and not na(prevPL) and math.abs(lastPL - prevPL) <= atr * 0.25
+    line.delete(eqlLine)
+    label.delete(eqlLbl)
+    lvlL = math.min(lastPL, prevPL)
+    eqlLine := line.new(bar_index - pivotLen, lvlL, bar_index + 10, lvlL, color=color.new(color.fuchsia, 20), style=line.style_dashed, width=1)
+    eqlLbl  := label.new(bar_index + 10, lvlL, "EQL $$$", style=label.style_label_left, color=color.new(color.fuchsia, 75), textcolor=color.fuchsia, size=size.small)
+// Liquidity taken → remove the marker
+if not na(eqhLine) and high > line.get_y1(eqhLine)
+    line.delete(eqhLine)
+    label.delete(eqhLbl)
+if not na(eqlLine) and low < line.get_y1(eqlLine)
+    line.delete(eqlLine)
+    label.delete(eqlLbl)
+
+// ─── Order Blocks: last opposite candle before a body-close structure break ─
+var array<box> obBullArr = array.new<box>()
+var array<box> obBearArr = array.new<box>()
+
+if showOB and bosUp
+    int idx = -1
+    for i = 1 to 15
+        if close[i] < open[i]
+            idx := i
+            break
+    if idx > 0
+        b = box.new(bar_index - idx, high[idx], bar_index, low[idx], border_color=color.new(color.teal, 50), bgcolor=color.new(color.teal, 88), extend=extend.right, text="OB", text_color=color.new(color.teal, 40), text_size=size.tiny, text_halign=text.align_left)
+        array.push(obBullArr, b)
+        if array.size(obBullArr) > 5
+            box.delete(array.shift(obBullArr))
+if showOB and bosDown
+    int idx = -1
+    for i = 1 to 15
+        if close[i] > open[i]
+            idx := i
+            break
+    if idx > 0
+        b = box.new(bar_index - idx, high[idx], bar_index, low[idx], border_color=color.new(color.red, 50), bgcolor=color.new(color.red, 88), extend=extend.right, text="OB", text_color=color.new(color.red, 40), text_size=size.tiny, text_halign=text.align_left)
+        array.push(obBearArr, b)
+        if array.size(obBearArr) > 5
+            box.delete(array.shift(obBearArr))
+
+// Invalidate OBs when price body-closes through them
+if array.size(obBullArr) > 0
+    for i = array.size(obBullArr) - 1 to 0
+        b = array.get(obBullArr, i)
+        if close < box.get_bottom(b)
+            box.delete(b)
+            array.remove(obBullArr, i)
+if array.size(obBearArr) > 0
+    for i = array.size(obBearArr) - 1 to 0
+        b = array.get(obBearArr, i)
+        if close > box.get_top(b)
+            box.delete(b)
+            array.remove(obBearArr, i)
+
+// ─── Fair Value Gaps (imbalance): 3-candle gap, min 30% of ATR ──────────────
+var array<box> fvgBullArr = array.new<box>()
+var array<box> fvgBearArr = array.new<box>()
+
+bullFVG = showFVG and low > high[2] and (low - high[2]) > atr * 0.3
+bearFVG = showFVG and high < low[2] and (low[2] - high) > atr * 0.3
+
+if bullFVG
+    f = box.new(bar_index - 1, low, bar_index, high[2], border_color=color.new(color.aqua, 60), bgcolor=color.new(color.aqua, 90), extend=extend.right, text="FVG", text_color=color.new(color.aqua, 50), text_size=size.tiny, text_halign=text.align_left)
+    array.push(fvgBullArr, f)
+    if array.size(fvgBullArr) > 6
+        box.delete(array.shift(fvgBullArr))
+if bearFVG
+    f = box.new(bar_index - 1, low[2], bar_index, high, border_color=color.new(color.maroon, 60), bgcolor=color.new(color.maroon, 90), extend=extend.right, text="FVG", text_color=color.new(color.maroon, 50), text_size=size.tiny, text_halign=text.align_left)
+    array.push(fvgBearArr, f)
+    if array.size(fvgBearArr) > 6
+        box.delete(array.shift(fvgBearArr))
+
+// Remove FVGs once fully filled
+if array.size(fvgBullArr) > 0
+    for i = array.size(fvgBullArr) - 1 to 0
+        f = array.get(fvgBullArr, i)
+        if low <= box.get_bottom(f)
+            box.delete(f)
+            array.remove(fvgBullArr, i)
+if array.size(fvgBearArr) > 0
+    for i = array.size(fvgBearArr) - 1 to 0
+        f = array.get(fvgBearArr, i)
+        if high >= box.get_top(f)
+            box.delete(f)
+            array.remove(fvgBearArr, i)
+
+// ─── POC: rolling highest-volume price (20 bins over the lookback) ─────────
+highestH = ta.highest(high, 400)
+lowestL  = ta.lowest(low, 400)
+var line  pocLine = na
+var label pocLbl  = na
+if showPOC and barstate.islast
+    len = math.min(pocLen, bar_index)
+    float lo = ta.lowest(low, pocLen)
+    float hi = ta.highest(high, pocLen)
+    step = (hi - lo) / 20
+    if step > 0 and len > 10
+        float bestVol = 0.0
+        float bestPrice = na
+        for bIdx = 0 to 19
+            binLo = lo + bIdx * step
+            binHi = binLo + step
+            float v = 0.0
+            for i = 0 to len - 1
+                p = hl2[i]
+                if p >= binLo and p < binHi
+                    v += nz(volume[i], 1)
+            if v > bestVol
+                bestVol := v
+                bestPrice := binLo + step / 2
+        line.delete(pocLine)
+        label.delete(pocLbl)
+        pocLine := line.new(bar_index - len, bestPrice, bar_index + 3, bestPrice, color=color.new(color.purple, 20), width=2)
+        pocLbl  := label.new(bar_index + 3, bestPrice, "POC " + str.tostring(bestPrice, format.mintick), style=label.style_label_left, color=color.new(color.purple, 70), textcolor=color.purple, size=size.small)
+
+// ─── Trade level drawing (Entry / SL / TP1 1:2 / TP2 1:4) ───────────────────
+drawTradeLevels(bool isBuy, float slOverride) =>
+    buf = atr * 0.25
+    float slPrice = na
+    if not na(slOverride)
+        slPrice := slOverride
+    else if isBuy
+        slPrice := slMode == "Signal candle wick" ? low - buf : math.min(nz(lastPL, low), low) - buf
+    else
+        slPrice := slMode == "Signal candle wick" ? high + buf : math.max(nz(lastPH, high), high) + buf
+    riskAmt = math.abs(close - slPrice)
+    if riskAmt > 0
+        tp1 = isBuy ? close + 2 * riskAmt : close - 2 * riskAmt
+        tp2 = isBuy ? close + 4 * riskAmt : close - 4 * riskAmt
+        x2  = bar_index + 25
+        line.new(bar_index, close,   x2, close,   color=color.new(color.gray, 20), width=1, style=line.style_dotted)
+        line.new(bar_index, slPrice, x2, slPrice, color=color.new(color.red, 0),   width=2)
+        line.new(bar_index, tp1,     x2, tp1,     color=color.new(color.teal, 30), width=1)
+        line.new(bar_index, tp2,     x2, tp2,     color=color.new(color.teal, 0),  width=2)
+        label.new(x2, close,   "Entry "     + str.tostring(close,   format.mintick), style=label.style_label_left, color=color.new(color.gray, 70), textcolor=color.white, size=size.small)
+        label.new(x2, slPrice, "SL "        + str.tostring(slPrice, format.mintick), style=label.style_label_left, color=color.new(color.red, 60),  textcolor=color.red,   size=size.small)
+        label.new(x2, tp1,     "TP1 (1:2) " + str.tostring(tp1,     format.mintick), style=label.style_label_left, color=color.new(color.teal, 70), textcolor=color.teal,  size=size.small)
+        label.new(x2, tp2,     "TP2 (1:4) " + str.tostring(tp2,     format.mintick), style=label.style_label_left, color=color.new(color.teal, 60), textcolor=color.teal,  size=size.small)
+        alert((isBuy ? "ZTT BUY " : "ZTT SELL ") + syminfo.ticker
+             + " | Entry " + str.tostring(close, format.mintick)
+             + " | SL "    + str.tostring(slPrice, format.mintick)
+             + " | TP1 "   + str.tostring(tp1, format.mintick)
+             + " | TP2 "   + str.tostring(tp2, format.mintick), alert.freq_once_per_bar_close)
 
 // ─── Signals ────────────────────────────────────────────────────────────────
 var int lastSigBar = -99999
@@ -176,48 +332,37 @@ sellRaw = structBear and close < ema50 and sellPct >= pressureThresh and bearCon
 
 buySignal  = buyRaw  and canSignal
 sellSignal = sellRaw and canSignal
-if buySignal or sellSignal
+
+// TRAP reversals: liquidity sweep in the last 3 bars + reversal candle now
+recentSweepDown = sweepDown or sweepDown[1] or sweepDown[2]
+recentSweepUp   = sweepUp   or sweepUp[1]   or sweepUp[2]
+trapBuy  = showSweeps and recentSweepDown and bullConfirm and inTradeWindow and canSignal and not buySignal
+trapSell = showSweeps and recentSweepUp   and bearConfirm and inTradeWindow and canSignal and not sellSignal
+
+if buySignal or sellSignal or trapBuy or trapSell
     lastSigBar := bar_index
+
+// Early setups: structure + candle agree but pressure/session missing
+buyEarly  = showEarly and structBull and close > ema50 and bullConfirm and not buySignal and not trapBuy
+sellEarly = showEarly and structBear and close < ema50 and bearConfirm and not sellSignal and not trapSell
 
 plotshape(showSignals and buySignal,  "BUY",  shape.labelup,   location.belowbar, color.new(color.teal, 0), text="BUY",  textcolor=color.white, size=size.small)
 plotshape(showSignals and sellSignal, "SELL", shape.labeldown, location.abovebar, color.new(color.red, 0),  text="SELL", textcolor=color.white, size=size.small)
+plotshape(showSignals and trapBuy,  "TRAP BUY",  shape.labelup,   location.belowbar, color.new(color.purple, 0), text="TRAP\nBUY",  textcolor=color.white, size=size.small)
+plotshape(showSignals and trapSell, "TRAP SELL", shape.labeldown, location.abovebar, color.new(color.purple, 0), text="TRAP\nSELL", textcolor=color.white, size=size.small)
+plotshape(buyEarly,  "Early buy setup",  shape.triangleup,   location.belowbar, color.new(color.teal, 55), text="BUY?",  textcolor=color.new(color.teal, 40), size=size.tiny)
+plotshape(sellEarly, "Early sell setup", shape.triangledown, location.abovebar, color.new(color.red, 55),  text="SELL?", textcolor=color.new(color.red, 40),  size=size.tiny)
 
-// Structure break markers (early heads-up, NOT an entry by themselves)
+// Structure break markers
 plotshape(bosUp,   "BOS Up",   shape.triangleup,   location.belowbar, color.new(color.teal, 40), size=size.tiny)
 plotshape(bosDown, "BOS Down", shape.triangledown, location.abovebar, color.new(color.red, 40),  size=size.tiny)
 
-// ─── Entry / SL / TP levels on every signal ─────────────────────────────────
-drawTradeLevels(bool isBuy) =>
-    buf = atr * 0.25  // small buffer beyond the wick, course style
-    float slPrice = na
-    if isBuy
-        slPrice := slMode == "Signal candle wick" ? low - buf : math.min(nz(lastPL, low), low) - buf
-    else
-        slPrice := slMode == "Signal candle wick" ? high + buf : math.max(nz(lastPH, high), high) + buf
-    riskAmt = math.abs(close - slPrice)
-    if riskAmt > 0
-        tp1 = isBuy ? close + 2 * riskAmt : close - 2 * riskAmt
-        tp2 = isBuy ? close + 4 * riskAmt : close - 4 * riskAmt
-        x2  = bar_index + 25
-        line.new(bar_index, close,   x2, close,   color=color.new(color.gray, 20),  width=1, style=line.style_dotted)
-        line.new(bar_index, slPrice, x2, slPrice, color=color.new(color.red, 0),    width=2)
-        line.new(bar_index, tp1,     x2, tp1,     color=color.new(color.teal, 30),  width=1)
-        line.new(bar_index, tp2,     x2, tp2,     color=color.new(color.teal, 0),   width=2)
-        label.new(x2, close,   "Entry "     + str.tostring(close,   format.mintick), style=label.style_label_left, color=color.new(color.gray, 70), textcolor=color.white, size=size.small)
-        label.new(x2, slPrice, "SL "        + str.tostring(slPrice, format.mintick), style=label.style_label_left, color=color.new(color.red, 60),  textcolor=color.red,   size=size.small)
-        label.new(x2, tp1,     "TP1 (1:2) " + str.tostring(tp1,     format.mintick), style=label.style_label_left, color=color.new(color.teal, 70), textcolor=color.teal,  size=size.small)
-        label.new(x2, tp2,     "TP2 (1:4) " + str.tostring(tp2,     format.mintick), style=label.style_label_left, color=color.new(color.teal, 60), textcolor=color.teal,  size=size.small)
-        // Dynamic alert with the exact numbers (enable via "Any alert() function call")
-        alert((isBuy ? "ZTT BUY " : "ZTT SELL ") + syminfo.ticker
-             + " | Entry " + str.tostring(close, format.mintick)
-             + " | SL "    + str.tostring(slPrice, format.mintick)
-             + " | TP1 "   + str.tostring(tp1, format.mintick)
-             + " | TP2 "   + str.tostring(tp2, format.mintick), alert.freq_once_per_bar_close)
-
-if showTargets and buySignal
-    drawTradeLevels(true)
-if showTargets and sellSignal
-    drawTradeLevels(false)
+if showTargets and (buySignal or trapBuy)
+    slO = trapBuy ? math.min(low, low[1], low[2]) - atr * 0.25 : float(na)
+    drawTradeLevels(true, slO)
+if showTargets and (sellSignal or trapSell)
+    slO = trapSell ? math.max(high, high[1], high[2]) + atr * 0.25 : float(na)
+    drawTradeLevels(false, slO)
 
 // ─── Dashboard table ────────────────────────────────────────────────────────
 var table dash = table.new(position.top_right, 2, 7, border_width=1)
@@ -247,8 +392,10 @@ if showTable and barstate.islast
     table.cell(dash, 1, 6, sweepTxt, text_color=color.white, bgcolor=color.new(color.purple, 50))
 
 // ─── Alerts ─────────────────────────────────────────────────────────────────
-alertcondition(buySignal,  "ZTT BUY signal",  "ZTT BUY: bullish structure + pressure + confirmation candle on {{ticker}} {{interval}}")
-alertcondition(sellSignal, "ZTT SELL signal", "ZTT SELL: bearish structure + pressure + confirmation candle on {{ticker}} {{interval}}")
+alertcondition(buySignal,  "ZTT BUY signal",  "ZTT BUY: full confluence on {{ticker}} {{interval}}")
+alertcondition(sellSignal, "ZTT SELL signal", "ZTT SELL: full confluence on {{ticker}} {{interval}}")
+alertcondition(trapBuy,    "ZTT TRAP BUY",    "Stop-hunt below + bullish reversal candle on {{ticker}} {{interval}}")
+alertcondition(trapSell,   "ZTT TRAP SELL",   "Stop-hunt above + bearish reversal candle on {{ticker}} {{interval}}")
 alertcondition(bosUp,      "Structure break UP",   "Body close above last swing high on {{ticker}} {{interval}}")
 alertcondition(bosDown,    "Structure break DOWN", "Body close below last swing low on {{ticker}} {{interval}}")
 alertcondition(sweepUp,    "Liquidity sweep of highs", "Wick above PDH/swing high, closed back inside on {{ticker}} {{interval}}")
